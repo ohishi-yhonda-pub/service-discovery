@@ -6,10 +6,15 @@
 		"deploy": "wrangler deploy",
 		"dev": "wrangler dev",
 		"start": "wrangler dev",
-		"cf-typegen": "wrangler types"
+		"types": "wrangler types",
+		"test": "vitest"
 	},
 	"devDependencies": {
+		"@cloudflare/vitest-pool-workers": "^0.8.60",
+		"@vitest/coverage-istanbul": "^3.2.4",
+		"@vitest/coverage-v8": "^3.2.4",
 		"typescript": "^5.5.2",
+		"vitest": "^3.2.4",
 		"wrangler": "^4.28.0"
 	}
 }

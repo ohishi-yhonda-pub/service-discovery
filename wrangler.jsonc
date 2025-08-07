@@ -10,7 +10,7 @@
 	"migrations": [
 		{
 			"new_sqlite_classes": [
-				"MyDurableObject"
+				"ServiceRegistry"
 			],
 			"tag": "v1"
 		}
@@ -18,13 +18,16 @@
 	"durable_objects": {
 		"bindings": [
 			{
-				"class_name": "MyDurableObject",
-				"name": "MY_DURABLE_OBJECT"
+				"class_name": "ServiceRegistry",
+				"name": "SERVICE_REGISTRY"
 			}
 		]
 	},
 	"observability": {
 		"enabled": true
+	},
+	"dev": {
+		"port": 3000
 	}
 	/**
 	 * Smart Placement

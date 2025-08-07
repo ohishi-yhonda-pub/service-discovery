@@ -1,66 +1,188 @@
 import { DurableObject } from "cloudflare:workers";
 
-/**
- * Welcome to Cloudflare Workers! This is your first Durable Objects application.
- *
- * - Run `npm run dev` in your terminal to start a development server
- * - Open a browser tab at http://localhost:8787/ to see your Durable Object in action
- * - Run `npm run deploy` to publish your application
- *
- * Bind resources to your worker in `wrangler.jsonc`. After adding bindings, a type definition for the
- * `Env` object can be regenerated with `npm run cf-typegen`.
- *
- * Learn more at https://developers.cloudflare.com/durable-objects
- */
+export interface ServiceInfo {
+	url: string;
+	metadata: Record<string, any>;
+	registeredAt: number;
+	lastHealthCheck?: number;
+	healthy?: boolean;
+}
 
-/** A Durable Object's behavior is defined in an exported Javascript class */
-export class MyDurableObject extends DurableObject<Env> {
-	/**
-	 * The constructor is invoked once upon creation of the Durable Object, i.e. the first call to
-	 * 	`DurableObjectStub::get` for a given identifier (no-op constructors can be omitted)
-	 *
-	 * @param ctx - The interface for interacting with Durable Object state
-	 * @param env - The interface to reference bindings declared in wrangler.jsonc
-	 */
+export interface RegisterServiceRequest {
+	name: string;
+	url: string;
+	metadata?: Record<string, any>;
+}
+
+export interface DiscoverServiceRequest {
+	name: string;
+}
+
+export interface ListServicesRequest {
+	prefix?: string;
+}
+
+export interface HealthCheckRequest {
+	name: string;
+}
+
+export interface IServiceRegistry {
+	registerService(request: RegisterServiceRequest): Promise<{ success: boolean; serviceId: string }>;
+	unregisterService(name: string): Promise<{ success: boolean }>;
+	discoverService(request: DiscoverServiceRequest): Promise<ServiceInfo | null>;
+	listServices(request?: ListServicesRequest): Promise<Array<[string, ServiceInfo]>>;
+	updateHealthStatus(request: HealthCheckRequest): Promise<{ success: boolean }>;
+}
+
+export class ServiceRegistry extends DurableObject<Env> implements IServiceRegistry {
 	constructor(ctx: DurableObjectState, env: Env) {
 		super(ctx, env);
 	}
 
-	/**
-	 * The Durable Object exposes an RPC method sayHello which will be invoked when when a Durable
-	 *  Object instance receives a request from a Worker via the same method invocation on the stub
-	 *
-	 * @param name - The name provided to a Durable Object instance from a Worker
-	 * @returns The greeting to be sent back to the Worker
-	 */
-	async sayHello(name: string): Promise<string> {
-		return `Hello, ${name}!`;
+	async registerService(request: RegisterServiceRequest): Promise<{ success: boolean; serviceId: string }> {
+		const { name, url, metadata = {} } = request;
+		const serviceInfo: ServiceInfo = {
+			url,
+			metadata,
+			registeredAt: Date.now(),
+			healthy: true
+		};
+		
+		await this.ctx.storage.put(`service:${name}`, serviceInfo);
+		return { success: true, serviceId: name };
+	}
+
+	async unregisterService(name: string): Promise<{ success: boolean }> {
+		await this.ctx.storage.delete(`service:${name}`);
+		return { success: true };
+	}
+
+	async discoverService(request: DiscoverServiceRequest): Promise<ServiceInfo | null> {
+		const service = await this.ctx.storage.get<ServiceInfo>(`service:${request.name}`);
+		return service || null;
+	}
+
+	async listServices(request: ListServicesRequest = {}): Promise<Array<[string, ServiceInfo]>> {
+		const prefix = request.prefix ? `service:${request.prefix}` : 'service:';
+		const services = await this.ctx.storage.list<ServiceInfo>({ prefix });
+		return Array.from(services.entries()).map(([key, value]) => [
+			key.replace('service:', ''),
+			value
+		]);
+	}
+
+	async updateHealthStatus(request: HealthCheckRequest): Promise<{ success: boolean }> {
+		const { name } = request;
+		const service = await this.ctx.storage.get<ServiceInfo>(`service:${name}`);
+		
+		if (!service) {
+			return { success: false };
+		}
+
+		try {
+			const response = await fetch(`${service.url}/health`, {
+				method: 'GET',
+				signal: AbortSignal.timeout(5000)
+			});
+			
+			service.healthy = response.ok;
+			service.lastHealthCheck = Date.now();
+			
+			await this.ctx.storage.put(`service:${name}`, service);
+			return { success: true };
+		} catch (error) {
+			service.healthy = false;
+			service.lastHealthCheck = Date.now();
+			
+			await this.ctx.storage.put(`service:${name}`, service);
+			return { success: true };
+		}
 	}
 }
 
 export default {
-	/**
-	 * This is the standard fetch handler for a Cloudflare Worker
-	 *
-	 * @param request - The request submitted to the Worker from the client
-	 * @param env - The interface to reference bindings declared in wrangler.jsonc
-	 * @param ctx - The execution context of the Worker
-	 * @returns The response to be sent back to the client
-	 */
-	async fetch(request, env, ctx): Promise<Response> {
-		// Create a `DurableObjectId` for an instance of the `MyDurableObject`
-		// class named "foo". Requests from all Workers to the instance named
-		// "foo" will go to a single globally unique Durable Object instance.
-		const id: DurableObjectId = env.MY_DURABLE_OBJECT.idFromName("foo");
+	async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+		const url = new URL(request.url);
+		const path = url.pathname;
 
-		// Create a stub to open a communication channel with the Durable
-		// Object instance.
-		const stub = env.MY_DURABLE_OBJECT.get(id);
+		const registryId = env.SERVICE_REGISTRY.idFromName("global");
+		const registry = env.SERVICE_REGISTRY.get(registryId);
 
-		// Call the `sayHello()` RPC method on the stub to invoke the method on
-		// the remote Durable Object instance
-		const greeting = await stub.sayHello("world");
+		try {
+			if (path === "/register" && request.method === "POST") {
+				const body = await request.json() as RegisterServiceRequest;
+				const result = await registry.registerService(body);
+				return Response.json(result);
+			}
 
-		return new Response(greeting);
+			if (path === "/unregister" && request.method === "POST") {
+				const body = await request.json() as { name: string };
+				const result = await registry.unregisterService(body.name);
+				return Response.json(result);
+			}
+
+			if (path === "/discover" && request.method === "POST") {
+				const body = await request.json() as DiscoverServiceRequest;
+				const service = await registry.discoverService(body);
+				
+				if (!service) {
+					return Response.json({ error: "Service not found" }, { status: 404 });
+				}
+				
+				return Response.json(service);
+			}
+
+			if (path === "/services" && request.method === "GET") {
+				const prefix = url.searchParams.get("prefix") || undefined;
+				const services = await registry.listServices({ prefix });
+				return Response.json({ services });
+			}
+
+			if (path === "/health-check" && request.method === "POST") {
+				const body = await request.json() as HealthCheckRequest;
+				const result = await registry.updateHealthStatus(body);
+				return Response.json(result);
+			}
+
+			if (path === "/rpc" && request.method === "POST") {
+				const body = await request.json() as {
+					service: string;
+					method: string;
+					params: any[];
+				};
+
+				const service = await registry.discoverService({ name: body.service });
+				
+				if (!service || !service.healthy) {
+					return Response.json({ 
+						error: service ? "Service unhealthy" : "Service not found" 
+					}, { status: service ? 503 : 404 });
+				}
+
+				const rpcRequest = {
+					jsonrpc: "2.0",
+					method: body.method,
+					params: body.params,
+					id: crypto.randomUUID()
+				};
+
+				const rpcResponse = await fetch(`${service.url}/rpc`, {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify(rpcRequest)
+				});
+
+				const rpcResult = await rpcResponse.json();
+				return Response.json(rpcResult);
+			}
+
+			return Response.json({ error: "Not found" }, { status: 404 });
+		} catch (error) {
+			return Response.json({ 
+				error: "Internal server error", 
+				/* istanbul ignore next */
+				message: error instanceof Error ? error.message : /* istanbul ignore next */ "Unknown error" 
+			}, { status: 500 });
+		}
 	},
 } satisfies ExportedHandler<Env>;
