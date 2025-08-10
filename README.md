@@ -76,12 +76,26 @@ Content-Type: application/json
 ## 開発
 
 ### 前提条件
-- Node.js
-- Cloudflare Workers CLI (wrangler)
+- Node.js (v18以上)
+- npm または pnpm
+- Cloudflare アカウント
 
 ### セットアップ
+
+1. リポジトリをクローン
+```bash
+git clone https://github.com/yourusername/service-discovery.git
+cd service-discovery
+```
+
+2. 依存関係をインストール
 ```bash
 npm install
+```
+
+3. Wranglerでログイン（初回のみ）
+```bash
+npx wrangler login
 ```
 
 ### 開発サーバー起動
@@ -89,15 +103,31 @@ npm install
 npm run dev
 ```
 
+開発サーバーは http://localhost:3000 で起動します。
+
 ### テスト実行
 ```bash
 npm test
 ```
 
 ### デプロイ
+
+1. Cloudflare アカウントIDを確認
+```bash
+npx wrangler whoami
+```
+
+2. デプロイ実行
 ```bash
 npm run deploy
 ```
+
+### 設定のカスタマイズ
+
+`wrangler.jsonc`でWorkerの設定をカスタマイズできます：
+- `name`: Workerの名前
+- `compatibility_date`: 互換性日付
+- `dev.port`: 開発サーバーのポート番号
 
 ## アーキテクチャ
 
@@ -116,3 +146,7 @@ npm run deploy
 - エラーケース: 異常系のテスト
 
 テストはvitestと@cloudflare/vitest-pool-workersを使用してCloudflare Workers環境で実行されます。
+
+## ライセンス
+
+MIT License - 詳細は[LICENSE](./LICENSE)ファイルを参照してください。
